@@ -1,0 +1,5 @@
+# Used for deployment
+awscli>=1.18.125
+git+https://github.com/Nextdoor/kingpin.git@v1.0.1
+
+# metadata: 0.2

@@ -1,0 +1,99 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: https://git.corp.nextdoor.com/Nextdoor/hello-world-apache.template.git
+Parameters:
+   # Deployment-level Settings - Required!
+  AppGroup:
+    Type: String
+    Description: String representing the AppGroup - used for billing purposes.
+
+  Project:
+    Type: String
+    Description: |-
+      Reference to the Github Project name - this should always match the Git
+      repo name exactly. There should be no .git in here.
+
+  ECSCluster:
+    Type: String
+    Description: |-
+      The name of the ECS cluster you're using. Usually this is named to match
+      the AppGroup, but not always.
+
+  ALBStackName:
+    Type: String
+    Description: |-
+      A reference to the name of the ALB CLoudFormation stack that launched
+      your Load Balancer in the Boneman.git repo.
+
+  ImageTag:
+    Type: String
+    Description: The Image Tag to use for the $ImageName.
+
+  # These values need to closely match whats in the Makefile - these are
+  # optional and can be overwitten.
+  EcrRegistryId:
+    Type: String
+    Default: '364942603424'
+    Description: The account-id that holds our Docker images
+
+  EcrNamespace:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - nextdoor
+    Description: The name of the namespace in which our image lives
+
+  EcrRepositoryRegion:
+    Type: String
+    Default: us-west-2
+    Description: >-
+      This is the region in which we will find our ECR Repos. While
+      we launch our services in Regions A, B and C, we might have the
+      repositories local to Regions C, D and B.
+
+Resources:
+
+ Task:
+  Type: AWS::ECS::TaskDefinition
+  Properties:
+    ContainerDefinitions:
+      - Name: App
+        Image:
+          Fn::Sub: ${EcrRegistryId}.dkr.ecr.${EcrRepositoryRegion}.amazonaws.com/${EcrNamespace}/${Project}:${ImageTag}
+        Cpu: 128
+        Memory: 256
+        MemoryReservation: 256
+        Essential: true
+        PortMappings:
+          - ContainerPort: 443
+
+ Service:
+  Type: AWS::ECS::Service
+  DependsOn: Task
+  Properties:
+    Cluster: {Ref: ECSCluster}
+    Role: AmazonEC2ContainerServiceRole
+    TaskDefinition: {Ref: Task}
+    DesiredCount: 2
+    DeploymentConfiguration:
+      MinimumHealthyPercent: 100
+      MaximumPercent: 200
+    LoadBalancers:
+      - ContainerName: App
+        ContainerPort: 443
+        TargetGroupArn:
+          Fn::ImportValue:
+            Fn::Sub: ${ALBStackName}-TargetGroupArn
+
+    PlacementStrategies:
+      - Field: instanceId
+        Type: spread
+
+    Tags:
+      - Key: app_group
+        Value:
+          Ref: AppGroup
+      - Key: project
+        Value:
+          Ref: Project

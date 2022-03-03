@@ -1,0 +1,135 @@
+version: 2
+
+step_library:
+  - &run-git-submodules
+    run:
+      name: Checkout Git Submodules
+      command: make git_submodules
+
+  - &save-git-submodules
+    save_cache:
+      key: submodule-{{ checksum ".gitmodules" }}
+      paths:
+        - .git/modules
+
+  - &restore-git-submodules
+    restore_cache:
+      keys:
+        - submodule-{{ checksum ".gitmodules" }}
+
+  - &run-pip-install
+    run:
+      name: Install the Python Dependencies
+      command: |
+        # On the some build instances instances, we have to install the missing
+        # pyvenv package.. but its super fast.
+        which pip3 > /dev/null || sh -c "sudo apt-get update && sudo apt-get install python3-pip"
+        which pyvenv > /dev/null || sudo apt-get install python3-venv
+        dpkg -L python3-wheel > /dev/null || sudo apt-get install python3-wheel
+
+        # Standard python3 venv now..
+        make venv
+
+  - &save-pip-install
+    save_cache:
+      key: pip-{{ checksum "requirements.txt" }}
+      paths:
+        - .venv
+
+  - &restore-pip-install
+    restore_cache:
+      keys:
+        - pip-{{ checksum "requirements.txt" }}
+
+jobs:
+  build:
+    docker:
+      - image: circleci/python
+    steps:
+      - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - *restore-git-submodules
+      - *restore-pip-install
+      - *run-git-submodules
+      - *run-pip-install
+      - *save-git-submodules
+      - *save-pip-install
+      - run: make ecr_login
+
+      # Pull down the 'latest' tagged image, as well as (if previously built)
+      # our actual SHA1-tagged image. This step can fail, if for some reason or
+      # another there is no current cached puppet-base image in the repo.
+      - run:
+          name: Pre-populate the build cache
+          command: make docker_pull || DOCKER_TAG=latest make docker_pull
+
+      # Build the image and test it
+      - run: make docker_build
+      - run: make docker_run
+      - run: make docker_test
+
+      # Tag and push the built image back to our Engineering Repository (set
+      # based on $ACCOUNT_ID above). The image will be tagged with test-$SHA1,
+      # which makes it easily accessible via make docker_pull, as
+      # well as gives it a countdown timer so that it will be purged
+      # automatically from the ECR registry after a few days.
+      - run:
+          name: Push the Image to our Repo
+          command: |
+            make docker_push
+
+            # If we're pushing the main tag, always use that simple high
+            # level tag name. This is only used for keeping a "most recent"
+            # version of the image around for populating the build cache above.
+            if [ "${CIRCLE_BRANCH}" == "main" ]; then
+              DOCKER_TAG=latest make docker_push
+            fi
+
+  deploy_dry: &deploy_dry
+    docker:
+      - image: circleci/python
+    environment:
+      DRY: true
+    steps:
+      - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - *restore-pip-install
+      - run: make deploy
+
+  deploy:
+    <<: *deploy_dry
+    environment:
+      DRY: false
+
+workflows:
+  version: 2
+  test:
+    jobs:
+
+      - build:
+          context: staging
+          filters:
+            tags:
+              only: /.*/
+
+      - deploy_dry:
+          context: staging
+          requires:
+            - build
+          filters:
+            tags:
+              only: /.*/
+
+      - deploy:
+          context: staging
+          requires:
+            - deploy_dry
+          filters:
+            branches:
+              only:
+                - /(main|master)$/
+            tags:
+              # Strict SemVer Regex: https://regexr.com/39s32
+              only: /^((([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?)(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?)$/

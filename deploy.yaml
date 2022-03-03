@@ -1,0 +1,14 @@
+---
+- actor: aws.cloudformation.Stack
+  options:
+    name: HELLO-WORLD-APACHE-TEMPLATE-dev1
+    region: us-west-2
+    capabilities: [CAPABILITY_AUTO_EXPAND]
+    template: stack.yaml
+    parameters:
+      AppGroup: dev1
+      ECSCluster: dev
+      Project: hello-world-apache.template
+      ALBStackName: ALB-dev1-hello-world-apache-template  # Should match Boneman
+      ImageTag: '%DOCKER_TAG%'
+      EcrRepositoryRegion: us-west-2
